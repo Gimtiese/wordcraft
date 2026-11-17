@@ -755,6 +755,34 @@ fn compare_mark_block_records_paragraph_mark_revisions_on_whole_block_changes() 
     assert_eq!(s5.doc.plain_text(StoryRef::Body), orig_empty);
 }
 
+/// #6899: a paragraph the revised document has with its mark already deleted (by another author)
+/// is inserted by compare with an insertion only, so Accept All keeps the paragraph break.
+#[test]
+fn compare_inserted_paragraph_mark_drops_the_revised_pending_deletion() {
+    let mut rev = Document::from_text("Keep.\nNew.\nEnd.");
+    rev.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Delete,
+        author: "Other".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    let id = (rev.revisions.len() - 1) as u32;
+    if let Some(Block::Para(p)) = rev.body.get_mut(1).map(Arc::make_mut) {
+        p.mark.del = Some(id);
+    }
+    let path = std::env::temp_dir().join(format!("wc-compare-markdel-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    let mut s = Session::new(Document::from_text("Keep.\nEnd."));
+    let compared = s.run("review.compare", &json!({"path": path.to_string_lossy()}));
+    let _ = std::fs::remove_file(&path);
+    compared.unwrap();
+    let new = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text() == "New.").expect("the inserted paragraph");
+    assert!(new.mark.ins.is_some(), "the inserted paragraph's mark is an insertion");
+    assert!(new.mark.del.is_none(), "and not a deletion as well");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Keep.\nNew.\nEnd.");
+}
+
 #[test]
 fn macros_record_and_run() {
     let mut s = Session::new(Document::new());

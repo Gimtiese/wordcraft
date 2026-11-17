@@ -149,10 +149,12 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                         (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx))),
                         _ => {
                             if let Some(x) = a {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
+                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), &|c| c.del = Some(del), 0)));
                             }
                             if let Some(x) = b {
-                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ins), 0)));
+                                // A deletion pending on a revised paragraph mark would make accepting drop the
+                                // inserted paragraph break; it refers to the revised document's revisions anyway.
+                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ins), &|c| (c.del, c.ins) = (None, Some(ins)), 0)));
                             }
                         }
                     }
@@ -205,21 +207,21 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// Returns a copy of `b` with all text runs and paragraph marks (or nested table cells) updated by `f`.
-fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
+/// Returns a copy of `b` with all text runs (or nested table cells) updated by `f` and paragraph marks by `mark`.
+fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), mark: &dyn Fn(&mut CharProps), depth: usize) -> Block {
     match b {
         Block::Para(p) => {
             let mut p = p.clone();
             let len = p.len();
             let _ = p.format(0, len, f);
-            f(&mut p.mark);
+            mark(&mut p.mark);
             Block::Para(p)
         }
         Block::Table(t) => {
             let mut t = t.clone();
             if depth < 16 {
                 for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
-                    c.blocks = c.blocks.iter().map(|x| Arc::new(mark_block(x, f, depth + 1))).collect();
+                    c.blocks = c.blocks.iter().map(|x| Arc::new(mark_block(x, f, mark, depth + 1))).collect();
                 }
             }
             Block::Table(t)
